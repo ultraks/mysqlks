@@ -1,3 +1,4 @@
+class MysqlKsException extends Exception {}
 <?php
 /**
  * Prosta klasa do zarządzania bazą danych.
@@ -13,10 +14,8 @@
  * @created         20.04.2013
  * @last-modified   10.10.2013
  *
- * @TODO Operacje na kilku tabelach, ewentualnie przepisanie na PDO. 
- * @TODO 3 tryby debug: none, echo, exception
+ * @TODO Operacje na kilku tabelach, ewentualnie przepisanie na PDO.
  * @TODO zwracanie obiektów w zapytaniu select
- * @TODO różne id
  * @TODO selectCursos i metoda next()
  */
 class MysqlKs {
@@ -27,9 +26,23 @@ class MysqlKs {
 	private $dbPassword = '';
 	private $dbKodowanie = 'utf-8';
 	
+	// Zmienne do ustawienia przez użytkownika
+	private $debugMode = self::ECHO_MODE;
+	// Jest to domyślna nazwa dla klucza głównego tabeli
+	// @see setId()
+	private $defaultId = "id";
 	
+	// Komunikaty
+	private $komunikatBladPolaczenia = "Połączenie z bazą danych nieudane.";
+	private $komunikatZleId = "Niepoprawny identyfikowator";
+	
+	// Stałe klasowe
+	public static const NONE = 0;
+	public static const ECHO_MODE = 1;
+	public static const EXCEPTION_MODE = 2;
+	
+	// Zmienne klasowe
 	private static $instance;
-	private $debugMode = ($_SERVER["HTTP_HOST"] == "localhost");
 	private $db;
 	private $zapytanie;
 	private static $licznik = 0;
@@ -41,7 +54,7 @@ class MysqlKs {
 		
 		// Wyświetlenie komunikatu w przypadku błędy połączenia z bazą danych.
 		if ($this->db->connect_errno) {
-			echo "Połączenie z bazą danych nieudane.";
+			echo $this->komunikatBladPolaczenia;
 			exit;
 		}
 		
@@ -89,6 +102,25 @@ class MysqlKs {
 	 */
 	public function setCharset($names) {
 		$this->db->set_charset($names);
+	}
+	
+	/**
+	 * Metoda ustawia błąd wykonania.
+	 */
+	 private function showError($error) {
+		switch ($this->debugMode) {
+			case self::NONE: break;
+			case self::ECHO_MODE: echo $error; break;
+			case self::EXCEPTION_MODE throw new MysqlKsException($error); break;
+		}
+	 }
+	
+	/**
+	 * Metoda ustawia globalnie domyślną nazwę dla klucza głównego tabeli.
+	 * Klucz glówny tabeli jest wykorzystywany w metodach zakończonych na ById np deleteById().
+	 */
+	public function setId($id) {
+		$this->defaultId = $id;
 	}
 	
 	/** 
@@ -198,8 +230,8 @@ class MysqlKs {
 		
 		$tmp = $this->db->query($zapytanie);
 		
-		if ($this->debugMode && $this->db->errno) {
-			throw new MysqlKsException("Błąd w zapytaniu: {$this->db->error}");
+		if ($this->db->errno) {
+			$this->showError("Błąd w zapytaniu: {$this->db->error}");
 		} else {
 			return $tmp;
 		}
@@ -261,11 +293,41 @@ class MysqlKs {
 	}
 	
 	/**
-	 * @TODO rozne ID
+	 * Metoda działa podobnie do metody select() z tą różnicą, że możemy określić wartość id
+	 * czyli wartość klucza głównego tabeli który nas interesuje.
+	 * Domyślną wartością dla klucza głównego jest 'id', wartość tą możemy zmienić globalnie
+	 * @see setId($id)
+	 * albo podać ją jednorazowo w 4 parametrze metody ($userId)
+	 * @param $tabela i $wartości takie same jak w przypadku select()
+	 * @param $id - wartość id jaką chcemy wyszukać
+	 * @param $userId - nazwa dla klucza głównego
+	 *
+	 * Przykład:
+	 * $uzytkownik = $db->select("uzytkownicy", 3);
+	 * Wynik zapytania przy domyślnych ustawieniach:
+	 * SELECT * FROM uzytkownicy WHERE id=3
+	 *
+	 * $db->setId("uzytkownik_id")
+	 * $uzytkownik = $db->select("uzytkownicy", 3);
+	 * Wynik zapytania:
+	 * SELECT * FROM uzytkownicy WHERE uzytkownik_id=3
+	 *
+	 * $uzytkownik = $db->select("uzytkownicy", 3, array("id", "imie"), "user_id");
+	 * Wynik zapytania:
+	 * SELECT * FROM uzytkownicy WHERE user_id=3
 	 */
-	public function selectId($tabela, $id, $wartosci = "*") {
+	public function selectById($tabela, $id, $wartosci = "*", $userId = null) {
+		 
+		$valueId = ($userId ? $userId : $this->defaultId);
+		
 		$id = (int)$id;
-		$dodatki = "WHERE id=$id";
+		
+		if ($id < 1) {
+			showError($this->komunikatZleId);
+			return;
+		}
+		
+		$dodatki = "WHERE $valueId=$id";
 		return $this->select($tabela, $wartosci, $dodatki);
 	}
 	
@@ -449,9 +511,17 @@ class MysqlKs {
 		return $this->getAffectedRows();
 	}
 	
-	public function updateById($tabela, $wartosci, $pola , $id) {
+	public function updateById($tabela, $wartosci, $pola , $id, $userId = null) {
+		$valueId = ($userId ? $userId : $this->defaultId);
+		
 		$id = (int)$id;
-		$dodatki = "WHERE id = ".$id;
+		
+		if ($id < 1) {
+			showError($this->komunikatZleId);
+			return;
+		}
+		
+		$dodatki = "WHERE $valueId = ".$id;
 
 		return $this->update($tabela, $wartosci, $pola, $dodatki);
 	}
@@ -480,9 +550,17 @@ class MysqlKs {
 		return $this->getAffectedRows();
 	}
 	
-	public function deleteById($tabela, $id) {
+	public function deleteById($tabela, $id, $userId = null) {
+		$valueId = ($userId ? $userId : $this->defaultId);
+		
 		$id = (int)$id;
-		return $this->delete($tabela, $id, 'id');
+		
+		if ($id < 1) {
+			showError($this->komunikatZleId);
+			return;
+		}
+		
+		return $this->delete($tabela, $id, $valueId);
 	}
 }
 $db = MysqlKs::getInstance();
