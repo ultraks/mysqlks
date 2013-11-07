@@ -1,26 +1,36 @@
-class MysqlKsException extends Exception {}
 <?php
+/**
+ * Klasa wyjątków wyrzuconych przez klasę MysqlKs.
+ */
+class MysqlKsException extends Exception {}
 /**
  * Prosta klasa do zarządzania bazą danych.
  * Pomocna przy wykonywaniu operacji na 1 tabeli.
  * Wspiera instrukcje: select, insert, update, delete.
  * Klasa zapewnia podstawową ochronę przed SQL-Injection.
+ * Klasa to singleton po którym nie można dziedziczyć dlatego
+ * wszelkie zmiany są możliwe przez zmiane kodu klasy a nie
+ * przez dziedziczenie.
+ * Klasa przeznaczona dla małych projektów gdzie nie chcemy
+ * odpalać żadnego ORMa czy innej abstrakcji baz danych
+ * lub gdy nie wiemy co ORM lub abstrakcja baz danych.
  * 
- * Licencja: Open Source
+ * Dodatkowe przykłady oprócz tu zamieszczonych w kodzie
+ * znajdują się w pliku example.php
+ * 
  *
  * @author          Krzysztof Sikora
  * @link            http://ultra91.linuxpl.info Strona domowa autora
- * @version         v0.3
- * @created         20.04.2013
- * @last-modified   10.10.2013
+ * @license         Open Source
+ * @version         v0.4
+ * @since           20.04.2013
+ * @last-modified   6.11.2013
  *
  * @TODO Operacje na kilku tabelach, ewentualnie przepisanie na PDO.
- * @TODO zwracanie obiektów w zapytaniu select
- * @TODO selectCursos i metoda next()
  */
 class MysqlKs {
 	// Parametry połączenia z bazą danych
-	private $dbMysql = '';
+	private $dbHost = '';
 	private $dbBase = '';
 	private $dbLogin = '';
 	private $dbPassword = '';
@@ -28,6 +38,7 @@ class MysqlKs {
 	
 	// Zmienne do ustawienia przez użytkownika
 	private $debugMode = self::ECHO_MODE;
+	private $fetchType = self::FETCH_ASSOC;
 	// Jest to domyślna nazwa dla klucza głównego tabeli
 	// @see setId()
 	private $defaultId = "id";
@@ -35,22 +46,34 @@ class MysqlKs {
 	// Komunikaty
 	private $komunikatBladPolaczenia = "Połączenie z bazą danych nieudane.";
 	private $komunikatZleId = "Niepoprawny identyfikowator";
+	private $komunikatNieMaCursora = "Niepoprawne wywołanie metody next(), powinno być
+			poprzedzone wywołaniem metody selectCursor(), selectCursorUser() lub next().";
+	// %error% - zostanie zamienione na błąd zapytania
+	// %errno% - numer błedu zapytania
+	private $komunikatZleZapytanie = "Błąd w zapytaniu: %error%";
 	
 	// Stałe klasowe
-	public static const NONE = 0;
-	public static const ECHO_MODE = 1;
-	public static const EXCEPTION_MODE = 2;
+	const NONE = 0;
+	const ECHO_MODE = 1;
+	const EXCEPTION_MODE = 2;
+	
+	const FETCH_ASSOC = 0;
+	const FETCH_OBJECT = 1;
 	
 	// Zmienne klasowe
 	private static $instance;
 	private $db;
 	private $zapytanie;
 	private static $licznik = 0;
+	private $cursor = null;
 
 	
+	/**
+	 * Ustanaowienie połączenia z bazą i ustawienie kodowania.
+	 */
 	private function __construct() {
 		// Utworzenie nowego połączenia
-		@$this->db = new mysqli($this->dbMysql, $this->dbLogin, $this->dbPassword, $this->dbBase);
+		@$this->db = new mysqli($this->dbHost, $this->dbLogin, $this->dbPassword, $this->dbBase);
 		
 		// Wyświetlenie komunikatu w przypadku błędy połączenia z bazą danych.
 		if ($this->db->connect_errno) {
@@ -64,7 +87,7 @@ class MysqlKs {
 	
 	/**
 	 * Klasa to klasyczny przykład sigletona. Poniższa metoda służy do utworzenia obiektu.
-	 * Przykład:
+	 * @example
 	 * $db = MysqlKs::getInstance();
 	 */
 	public static function getInstance() {
@@ -76,7 +99,7 @@ class MysqlKs {
 	
 	/**
 	 * Wyświetla ostatnie zapytanie.
-	 * Przykład:
+	 * @example
 	 * $uzytkownicy = $db->selectFull("uzytkownicy");
 	 * // wyświetl zapytanie
 	 * echo $db;
@@ -88,7 +111,7 @@ class MysqlKs {
 	
 	/**
 	 * Zwraca ostatni identyfikator wstawiony do bazy
-	 * Przykład:
+	 * @example
 	 * $db->insert("wojewodztwa", "Lubelskie", "nazwa");
 	 * $lastInsertedId = $db->lastId();
 	 */
@@ -98,20 +121,41 @@ class MysqlKs {
 
 	/**
 	 * Ustawia kodowanie znaków
-	 * Przykład: $db->setCharset('utf-8');
+	 * @example $db->setCharset('utf-8');
 	 */
 	public function setCharset($names) {
 		$this->db->set_charset($names);
 	}
 	
 	/**
+	 * Ustawienie tryby zwracania danych przez polecenia SELECT
+	 * Dostępne 2 tryby: MysqlKs::FETCH_ASSOC - zwraca tablicę asocjacyjną (tryb domyślny)
+	 * MysqlKd::FETCH_OBJECT - zwraca obiekt
+	 * 
+	 * @example $db->setFetchType(MysqlKs::FETCH_OBJECT);
+	 */
+	public function setFetchType($type) {
+		$this->fetchType = $type;
+	}
+	
+	/**
+	 * @see setFetchType($type)
+	 * @return typ zwracanych wartości przez polecenia select
+	 */
+	public function getFetchType() {
+		return $this->fetchType;
+	}
+	
+	
+	/**
 	 * Metoda ustawia błąd wykonania.
+	 * @throws MysqlKsException (w trybie EXCEPTION_MODE)
 	 */
 	 private function showError($error) {
 		switch ($this->debugMode) {
 			case self::NONE: break;
 			case self::ECHO_MODE: echo $error; break;
-			case self::EXCEPTION_MODE throw new MysqlKsException($error); break;
+			case self::EXCEPTION_MODE: throw new MysqlKsException($error); break;
 		}
 	 }
 	
@@ -126,7 +170,7 @@ class MysqlKs {
 	/** 
 	 * Zwraca liczbę zmodyfikowanych rekordów przez ostatnie zapytanie
 	 * Wynik tej metody jest zwracany przez metody: insert, update, updateById, delete, deleteById
-	 * Przykład:
+	 *  @example
 	 * if ($db->deleteById("uzytkownicy", 5)
 	 *     echo "Usunięto użytkownika o id = 5";
 	 * else
@@ -140,8 +184,7 @@ class MysqlKs {
 	 * Zabezpieczenie przed SQL-Injection
 	 * Wszystkie wartości przekazywane przez użytkowników przechodzą przez tą metodę
 	 * W razie potrzeby można samemu użyć tej metody
-	 * Przykład:
-	 * $string = $db->escape($string);
+	 * @example $string = $db->escape($string);
 	 */
 	public function escape($str) {
 		if (is_null($str)) return $str;
@@ -154,7 +197,7 @@ class MysqlKs {
 	
 	/**
 	 * Określa początek transakcji
-	 * Przykład:
+	 * @example
 	 * $db->start();
 	 * ... // kilka operacji na bazie danych
 	 * $db->commit();
@@ -165,8 +208,7 @@ class MysqlKs {
 	
 	/**
 	 * Określa koniec transakcji
-	 * Przykład:
-	 * Patrz wyżej metoda start();
+	 * @see start();
 	 */
 	public function commit() {
 		$this->db->commit();
@@ -176,8 +218,7 @@ class MysqlKs {
 	 * Domyślnie wszystkie wartości przekazywane do metod są traktowane jako łąńcuchy znaków i otaczane znakami '
 	 * Kiedy zachodzi potrzeba przekazania innej wartości np funkcji sql jak np. NOW() należy użyć poniższej metody
 	 * Wartość null nie musi być opakowywana przez poniższą metode
-	 * Przykład
-	 * $db->insert("tabela", array(null, $db->expr("NOW()"), "jakaś nazwa"), array("id, "czas", "nazwa"));
+	 * @example $db->insert("tabela", array(null, $db->expr("NOW()"), "jakaś nazwa"), array("id, "czas", "nazwa"));
 	 */
 	public function expr($val) {
 		return array('value' => $val, 'isExpr' => true);
@@ -214,7 +255,7 @@ class MysqlKs {
 	 * Można jej użyć do zapytań których nie można uzyskać przez metody klasy np.
 	 * Wielo tabelowego zapytania insert
 	 * W przypadku wielo tabelowych zapytań SELECT należy korzystać z metod: selectUser() i selectFullUser()
-	 * Przykład:
+	 * @example
 	 * $zapytanie = "UPDATE uzytkownicy, firmy SET firmy.nazwa = 'Marex Co.' 
 	 *		WHERE uzytkownicy.firma = firmy.id AND uzytkownicy.id = 5";
 	 * $db->query($zapytanie);
@@ -224,6 +265,9 @@ class MysqlKs {
 		// @see getQueryCount()
 		self::$licznik++;
 		
+		// wyzerowanie cursora
+		$this->cursor = null;
+		
 		// zapisanie aktualnego zapytania
 		// @see __toSring()
 		$this->zapytanie = $zapytanie;
@@ -231,7 +275,9 @@ class MysqlKs {
 		$tmp = $this->db->query($zapytanie);
 		
 		if ($this->db->errno) {
-			$this->showError("Błąd w zapytaniu: {$this->db->error}");
+			$blad = str_replace(array("%error%", "%errno%"), 
+				array($this->db->error, $this->db->errno), $this->komunikatZleZapytanie);
+			$this->showError($blad);
 		} else {
 			return $tmp;
 		}
@@ -243,7 +289,7 @@ class MysqlKs {
 	 * @param $wartosci - wartości jakie mamy zwrócić * oznacza wszystko, wartości podajemy w postaci tablicy
 	 * np array("id", "imie") pojedynczych wartości nie trzeba umieszczać w tablicy np: "imie"
 	 * @param $dodatki - dodatki dodawane na koniec zapytania np: "WHERE imie='adam'"
-	 * @return pojedynczy wiersz tabeli, gdy wybieramy pojedynczą wartość np $wartosci = "id" zwraca pojedynczą wartość 
+	 * @return pojedynczy wiersz tabeli
 	 * Tabela uzytkownicy wykorzystywana do przykładów
 	 * ____________________________
 	 * |  id  |  imie  | nazwisko |
@@ -252,7 +298,7 @@ class MysqlKs {
 	 * |   2  | jarek  |   kot    |
 	 * |   3  | darek  | kowalski |
 	 * |--------------------------|
-	 * Przykłady:
+	 * @example
 	 * $uzytkownik = $db->select("uzytkownicy", "*", "WHERE imie='marek'");
 	 * print_r($uzytkownik);
 	 * Wynik:
@@ -263,6 +309,7 @@ class MysqlKs {
 	 *	[nazwisko] => kos
 	 *)
 	 *
+	 * @example
 	 * $uzytkownik = $db->select("uzytkownicy", array("id", "imie"), "WHERE imie='marek'");
 	 * print_r($uzytkownik);
 	 * Wynik:
@@ -272,24 +319,19 @@ class MysqlKs {
 	 *	[imie] => marek
 	 *)
 	 *	 
+	 * @example
 	 * $uzytkownik = $db->select("uzytkownicy", "id", "WHERE imie='marek'");
 	 * print_r($uzytkownik);
 	 * Wynik:
-	 * 1
+	 * Array
+	 *(
+	 *	[id] => 1
+	 *)
 	 */
 	public function select($tabela, $wartosci = "*", $dodatki = "") {
 		
-		$wynik = $this->selectFull($tabela, $wartosci, $dodatki);
-		if ($wynik) {
-			// jeśli tylko 1 pole było szukane nie zwracamy całej tablicy asocjacyjnej
-			// tylko pojedynczą wartość;
-			if (count($wynik[0]) == 1) {
-				$tmp = array_keys($wynik[0]);
-				return $wynik[0][$tmp[0]];
-			} 
-			return $wynik[0];
-		}
-		return null;
+		$zapytanie = getSelectQuery($tabela, $wartosci, $dodatki);
+		return $this->selectUser($zapytanie);	
 	}
 	
 	/**
@@ -302,16 +344,18 @@ class MysqlKs {
 	 * @param $id - wartość id jaką chcemy wyszukać
 	 * @param $userId - nazwa dla klucza głównego
 	 *
-	 * Przykład:
+	 * @example
 	 * $uzytkownik = $db->select("uzytkownicy", 3);
 	 * Wynik zapytania przy domyślnych ustawieniach:
 	 * SELECT * FROM uzytkownicy WHERE id=3
 	 *
+	 * @example
 	 * $db->setId("uzytkownik_id")
 	 * $uzytkownik = $db->select("uzytkownicy", 3);
 	 * Wynik zapytania:
 	 * SELECT * FROM uzytkownicy WHERE uzytkownik_id=3
 	 *
+	 * @example
 	 * $uzytkownik = $db->select("uzytkownicy", 3, array("id", "imie"), "user_id");
 	 * Wynik zapytania:
 	 * SELECT * FROM uzytkownicy WHERE user_id=3
@@ -335,78 +379,88 @@ class MysqlKs {
 	 * Metoda zwraca wszystkie pasujący rekordy w postaci tabeli indeksowanej
 	 * Parametry identyczne jak w przypadku metody select()
 	 * Od metody select() różni się tylko tym, że zwraca wszystkie rekordy a nie pojedynczy wiersz
-	 * Przykłady: 
+	 * @example 
 	 * $uzytkownicy = $db->selectFull("uzytkownicy");
 	 * print_r($uzytkownicy);
 	 * Wynik: 
 	 *Array
 	 *(
 	 *	[0] => Array
-     *   (
-     *       [id] => 1
-     *      [imie] => marek
-     *       [nazwisko] => kos
-     *   )
+	 *   (
+	 *	  [id] => 1
+	 *	  [imie] => marek
+	 *	  [nazwisko] => kos
+	 *   )
 	 *
-     *[1] => Array
-     *   (
-     *       [id] => 2
-     *       [imie] => jarek
-     *       [nazwisko] => kot
-     *   )
+	 *[1] => Array
+	 *   (
+	 *	   [id] => 2
+	 *	   [imie] => jarek
+	 *	   [nazwisko] => kot
+	 *   )
 	 *
-     *[2] => Array
-     *   (
-     *       [id] => 3
-     *       [imie] => darek
-     *       [nazwisko] => kowalski
-     *   )
+	 *[2] => Array
+	 *   (
+	 *	   [id] => 3
+	 *	   [imie] => darek
+	 *	   [nazwisko] => kowalski
+	 *   )
 	 *
 	 *)
+	 * @example
 	 * $uzytkownicy = $db->selectFull("uzytkownicy", array("id", "imie"));
 	 * print_r($uzytkownicy);
 	 * Wynik: 
 	 *Array
 	 *(
 	 *	[0] => Array
-     *   (
-     *       [id] => 1
-     *      [imie] => marek
-     *   )
+	 *   (
+	 *	   [id] => 1
+	 *	  [imie] => marek
+	 *   )
 	 *
-     *[1] => Array
-     *   (
-     *       [id] => 2
-     *       [imie] => jarek
-     *   )
+	 *[1] => Array
+	 *   (
+	 *	   [id] => 2
+	 *	   [imie] => jarek
+	 *   )
 	 *
-     *[2] => Array
-     *   (
-     *       [id] => 3
-     *       [imie] => darek
-     *   )
+	 *[2] => Array
+	 *   (
+	 *	   [id] => 3
+	 *	   [imie] => darek
+	 *   )
 	 *
 	 *)
+	 * @example
 	 * $uzytkownicy = $db->selectFull("uzytkownicy", array("id", "imie"), "WHERE id < 3");
 	 * print_r($uzytkownicy);
 	 * Wynik: 
 	 *Array
 	 *(
 	 *	[0] => Array
-     *   (
-     *       [id] => 1
-     *      [imie] => marek
-     *   )
+	 *   (
+	 *	   [id] => 1
+	 *	  [imie] => marek
+	 *   )
 	 *
-     *[1] => Array
-     *   (
-     *       [id] => 2
-     *       [imie] => jarek
-     *   )
+	 *[1] => Array
+	 *   (
+	 *	   [id] => 2
+	 *	   [imie] => jarek
+	 *   )
 	 *
 	 *)
 	 */
 	public function selectFull($tabela, $wartosci = "*", $dodatki = "") {
+		$zapytanie = getSelectQuery($tabela, $wartosci, $dodatki);
+		return $this->selectFullUser($zapytanie);
+	}
+	
+	/**
+	 * Metoda pomocnicza korzystają z niej niektóre metody select
+	 */
+	private function getSelectQuery($tabela, $wartosci, $dodatki) {
 		$zapytanie = "SELECT ";
 	
 		if (!is_array($wartosci)) $wartosci = array($wartosci);
@@ -421,38 +475,129 @@ class MysqlKs {
 		$zapytanie = rtrim($zapytanie, ", ");
 		
 		$zapytanie .= " FROM $tabela $dodatki";
-	
-		return $this->selectFullUser($zapytanie);
+		
+		return $zapytanie;
 	}
 	
 	/**
 	 * Metoda zwraca POJEDYNCZY wynik z zapytania napisanego przez uzytkownika
-	 * Przykład:
+	 * 
+	 * @example
 	 * $zapytanie = "SELECT uzytkownicy.*, firmy.id WHERE uzytkownicy.firma = firma.id AND firma.id=4";
 	 * $uzytkownicy = $db->selectUser($zapytanie);
 	 */
 	public function selectUser($zapytanie) {
 		$wynik = $this->query($zapytanie);
-		return $wynik->fetch_assoc();
+		
+		if ($this->fetchType == self::FETCH_ASSOC)
+			return $wynik->fetch_assoc();
+		
+		if ($this->fetchType == self::FETCH_OBJECT)
+			return $wynik->fetch_object();
 	}
 	
 	/**
 	 * Metoda zwraca wszystkie wyniki w postaci tabeli indeksowanej z zapytania napisanego przez uzytkownika
 	 * Różni się od metody selectUser() tylko liczbą zwracanych wierszy
-	 * Przykład:
+	 * 
+	 * @example
 	 * $zapytanie = "SELECT uzytkownicy.*, firmy.id WHERE uzytkownicy.firma = firma.id";
 	 * $uzytkownicy = $db->selectFullUser($zapytanie);
 	 */
 	public function selectFullUser($zapytanie) {
 		$wynik = $this->query($zapytanie);
-		$wynik2;
 		$wynik3 = array();
-		while ($wynik2 = $wynik->fetch_assoc()) {
-			$wynik3[] = $wynik2;
-		}
+		
+		if ($this->fetchType == self::FETCH_ASSOC)
+			while ($wynik2 = $wynik->fetch_assoc()) {
+				$wynik3[] = $wynik2;
+			}
+		
+		elseif ($this->fetchType == self::FETCH_OBJECT)
+			while ($wynik2 = $wynik->fetch_object()) {
+				$wynik3[] = $wynik2;
+			}
+		
 		return $wynik3;
 	}
+	
+	/**
+	 * Wydajniejszy odpowiednik metody selectFull().
+	 * Metoda selectFull() domyślnie zwraca tablicę wszystkich wartości
+	 * w przypadku dużej liczby rekordów może to nie być wydajne pamięciowo.
+	 * Wszystkie parametry takie same jak w metodzie select().
+	 * 
+	 * @example
+	 * $cursor = $db->selectCursor("uzytkownicy", array("id", "imie"));
+	 * while ($uzytkownik = $cursor->next()) {
+	 * 		echo "{$uzytkownik->id} - {$uzytkownik->imie}<br />";
+	 * }
+	 */
+	public function selectCursos($tabela, $wartosci = "*", $dodatki = "") {
+		
+		$zapytanie = getSelectQuery($tabela, $wartosci, $dodatki);
+		return $this->selectCursorUser($zapytanie);	
+	}
+	
+	/**
+	 * Wydajniejszy odpowiednik metody selectFullUser()
+	 * @see selectCurcor()
+	 * 
+	 * @example
+	 * $zapytanie = "SELECT id, imie FROM uzytkownicy";
+	 * $cursor = $db->selectCursorUser($zapytanie);
+	 * while ($uzytkownik = $cursor->next()) {
+	 * 		echo "{$uzytkownik->id} - {$uzytkownik->imie}<br />";
+	 * }
+	 */
+	public function selectCursosUser($zapytanie) {
+		$cursor = $this->query($zapytanie);
+		return $this;
+	}
+	
+	/**
+	 * Metoda do przechodzenia po rekordach.
+	 * Musi być poprzedzona wywołaniem metody selectCursor() lub selectCursorUser().
+	 * @see selectCursor()
+	 * @see selectCursorUser()
+	 */
+	public function next() {
+		if ($this->cursor == null) {
+			$this->showError($error);
+			return null;
+		}
+		
+		if ($this->fetchType == self::FETCH_ASSOC)
+			return $this->cursor->fetch_assoc();
+		
+		if ($this->fetchType == self::FETCH_OBJECT)
+			return $this->cursor->fetch_object();
+	}
 
+	/**
+	 * Metoda do wstawiania pojedynczego rekordu do bazy.
+	 * 
+	 * @param $tabela - tabela
+	 * @param $wartosci - tablica wartości (lub pojedyncza wartość) 
+	 * wstawianych do bazy w kolejności ich występowania w tablicy
+	 * @param $pola - tablica lub pojedyncza wartość, określający
+	 * nazwy kolumn do których mają być wpisane odpowiadające wartości
+	 * @return Liczbe wstawionych rekordow czyli 0 lub 1
+	 * @see expr()
+	 *
+	 * Metoda wstawia do tabeli $tabela wartości znajdujące się w tablicy $wartosci
+	 * w kolejności ich występowania w tablicy, gdy zostanie określony parametr $pola
+	 * odpowiednim wartościom z tablicy pola zostaną przyporządkowane odpowiadające
+	 * wartości z tablicy $wartosci, dla kolumn nie wyszczególnionych w tablicy wartości
+	 * zostaną przyporządkowane domyślne wartości z bazy danych. Kiedy parametr $pola 
+	 * nie jest określony, liczba elementów tablicy $wartosci musi być równa liczbie kolumn tabeli.
+	 * 
+	 * @example $db->insert("uzytkownicy", array("jan, "kowalski"), array("imie", "nazwisko");
+	 * @example
+	 * if ($db->insert("uzytkownicy", array(null, "jan, "kowalski"))
+	 * 		echo "Wpisano Jana Kowalskiego";
+	 * @example $db->insert("uzytkownicy", "jan", "imie");
+	 */
 	public function insert($tabela, $wartosci, $pola = null) {
 		$zapytanie = "INSERT INTO $tabela ";
 		
@@ -486,6 +631,18 @@ class MysqlKs {
 		return $this->getAffectedRows();
 	}
 	
+	/**
+	 * Metoda aktualizuje rekordy gdzie odpowiednie wartości tablicy $pola
+	 * równają się odpowiednim wartościom tablicy $wartosci
+	 * 
+	 * @return liczbe zaktualizowanych rekordów
+	 * @see expr() 
+	 * 
+	 * @example $db->update("uzytkownicy", "Jan", "imie");
+	 * @example $db->update("uzytkownicy", array("Jan", "Kowalski"), array("imie", "nazwisko"));
+	 * @example $db->update("uzytkownicy", "Jan", "imie", "WHERE nazwisko='kowalski'");
+	 * 	
+	 */
 	public function update($tabela, $wartosci, $pola, $dodatki = '') {
 		$zapytanie = "UPDATE $tabela SET ";
 	
@@ -511,6 +668,19 @@ class MysqlKs {
 		return $this->getAffectedRows();
 	}
 	
+	/**
+	 * Metoda do aktualizowania rekordu po wartości klucza głównego
+	 * @see update()
+	 * @see setId($id)
+	 * @see selectById()
+	 * @see expr()
+	 * 
+	 * @example $db->updateById("uzytkownicy", "jan", "imie", 4);
+	 * @example $db->updateById("uzytkownicy", array("jan", "kowalski"), array("imie", "nazwisko"), 4);
+	 * @example $db->updateById("uzytkownicy", array("jan", "kowalski"), array("imie", "nazwisko"), 
+	 * 			4, "uzytkownik_id");
+	 * 
+	 */
 	public function updateById($tabela, $wartosci, $pola , $id, $userId = null) {
 		$valueId = ($userId ? $userId : $this->defaultId);
 		
@@ -526,6 +696,25 @@ class MysqlKs {
 		return $this->update($tabela, $wartosci, $pola, $dodatki);
 	}
 	
+	/** 
+	 * Metoda do usuwania rekordow z bazy danych.
+	 * Metoda usuwa rekordy gdzie odpowiednie wartości tablicy $pola równają
+	 * się odpowiednim wartościom tablicy $wartosci
+	 * 
+	 * @param $tabela - tabela 
+	 * @param $wartosci - tablica wartości lub pojedyncza wartość
+	 * @param $pola - tak samo jak wyżej
+	 * @return liczbe usuniętych rekordów
+	 * @see expr()
+	 * 
+	 * @example
+	 * if ($db->delete("uzytkownicy", array("jan", "kowalski"), array("imie", "nazwisko")))
+	 * 		echo "Usunięto wszystkich Janów Kowalskich!";
+	 * 
+	 * @example 
+	 * $liczbaUsunietychRekordow = $db->delete("uzytkownicy", "jan", "imie");
+	 * echo "Usunięto: $liczbaUsunietychRekordow Janów";
+	 */
 	public function delete($tabela, $wartosci, $pola) {
 		$zapytanie = "DELETE FROM $tabela WHERE ";
 	
@@ -550,6 +739,20 @@ class MysqlKs {
 		return $this->getAffectedRows();
 	}
 	
+	/**
+	 * Metoda do usuwania rekordu po wartości klucza głównego
+	 * 
+	 * @see delete()
+	 * @see setId($id)
+	 * @see selectById()
+	 * @see expr()
+	 * 
+	 * @param $tabela - tabela
+	 * @param $id $userId - takie samo znaczenie jak w przypadku funkcji selectById()
+	 * 
+	 * @example $db->deleteById("uzytkownicy", 5);
+	 * @example $db->deleteById("uzytkownicy", 5, "uzytkownik_id");
+	 */
 	public function deleteById($tabela, $id, $userId = null) {
 		$valueId = ($userId ? $userId : $this->defaultId);
 		
@@ -563,5 +766,4 @@ class MysqlKs {
 		return $this->delete($tabela, $id, $valueId);
 	}
 }
-$db = MysqlKs::getInstance();
 ?>
