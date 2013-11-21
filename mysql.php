@@ -24,12 +24,14 @@ class MysqlKsException extends Exception {}
  * @license         Open Source
  * @version         v0.4
  * @since           20.04.2013
- * @last-modified   6.11.2013
+ * @last-modified   21.11.2013
  *
  * @TODO Operacje na kilku tabelach, ewentualnie przepisanie na PDO.
  */
 class MysqlKs {
-	// Parametry połączenia z bazą danych
+	// Parametry połączenia z bazą danych.
+	// Można je wpisać tutaj albo podać przy tworzeniu egzemplarza klasy
+	// @see getInstance()
 	private $dbHost = '';
 	private $dbBase = '';
 	private $dbLogin = '';
@@ -45,6 +47,8 @@ class MysqlKs {
 	
 	// Komunikaty
 	private $komunikatBladPolaczenia = "Połączenie z bazą danych nieudane.";
+	private $komunikatNiepodanoDanychPolaczenia = "Nie podano danych do połączenia.";
+	private $komunikatNiekompletneDanePolaczenia = "Nie podano wszystkich parametrów połączenia.";
 	private $komunikatZleId = "Niepoprawny identyfikowator";
 	private $komunikatNieMaCursora = "Niepoprawne wywołanie metody next(), powinno być
 			poprzedzone wywołaniem metody selectCursor(), selectCursorUser() lub next().";
@@ -87,14 +91,114 @@ class MysqlKs {
 	
 	/**
 	 * Klasa to klasyczny przykład sigletona. Poniższa metoda służy do utworzenia obiektu.
-	 * @example
-	 * $db = MysqlKs::getInstance();
+	 * Można przekazać do metody parametry połączenia. Można to zrobić jednorazowo.
+	 * Jeżeli nie podamy parametrów połączenia to korzystamy z parametrów podanych na 
+	 * sztywno w klasie albo z poprzednich parametrów połączenia.
+	 * 
+	 * @exmaple $db = MysqlKs::getInstance('localhost', 'root', 'pass123', 'jakas_baza');
+	 * @example $db = MysqlKs::getInstance();
 	 */
-	public static function getInstance() {
-		if (is_null(self::$instance)) {
+	public static function getInstance($dbHost = null, $dbLogin = null, $dbPassword = null, $dbBase = null) {
+		// Czy podano parametry połączenia
+		if ($dbHost != null) {
+			// Sprawdzamy czy podano wszystkie dane do połączenia
+			if ($dbHost == null || $dbPassword === null || $dbBase == null) {
+				showError($this->komunikatNiekompletneDanePolaczenia);
+				return;
+			// Podano wszystkie dane do połączenia
+			} else {
+				// Zapisujemy dane do połączenia w zmiennych klasy, aby przy kolejnym
+				// połączeniu przy braku podania danych do połączenia 
+				// móc skorzystać z poprzednich
+				$this->dbBase = $dbBase;
+				$this->dbLogin = $dbLogin;
+				$this->dbPassword = $dbPassword;
+				$this->dbBase = $dbBase;
+				
+				self::$instance = new MysqlKs();
+			}
+		} elseif (is_null(self::$instance)) {
+			// Jeżeli nie ma jakiejś danej do połączenia
+			if (!$this->dbBase || !$this->dbLogin || $this->dbPassword === null || !$this->dbBase) {
+				showError($this->komunikatNiekompletneDanePolaczenia);
+				return;
+			}
+			
 			self::$instance = new MysqlKs();
 		}
 		return self::$instance;
+	}
+	
+	/**
+	 * Ustaw host bazy danych.
+	 * @see getInstance()
+	 * @see getDbHost()
+	 */
+	public function setDbHost($dbHost) {
+		$this->dbHost = $dbHost;
+	}
+
+	/**
+	 * Ustaw login bazy danych.
+	 * @see getInstance()
+	 * @see getDbLogin()
+	 */
+	public function setDbLogin($dbLogin) {
+		$this->dbLogin = $dbLogin;
+	}
+
+	/**
+	 * Ustaw hasło bazy danych.
+	 * @see getInstance()
+	 * @see getDbPassword()
+	 */
+	public function setDbPassword($dbPassword) {
+		$this->dbPassword = $dbPassword;
+	}
+
+	/**
+	 * Ustaw baze danych.
+	 * @see getInstance()
+	 * @see getDbBase()
+	 */
+	public function setDbBase($dbBase) {
+		$this->dbBase = $dbBase;
+	}
+	
+	/**
+	 * Pobierz host bazy danych.
+	 * @see getInstance()
+	 * @see setDbHost()
+	 */
+	public function getDbHost() {
+		return $this->dbHost;
+	}
+	
+	/**
+	 * Pobierz login bazy danych.
+	 * @see getInstance()
+	 * @see setDbLogin()
+	 */
+	public function getDbLogin() {
+		return $this->dbLogin;
+	}
+
+	/**
+	 * Pobierz hasło bazy danych.
+	 * @see getInstance()
+	 * @see setDbPassword()
+	 */
+	public function getDbPassword() {
+		return $this->dbPassword;
+	}
+
+	/**
+	 * Pobierz baze danych.
+	 * @see getInstance()
+	 * @see setDbBase()
+	 */
+	public function getDbBase() {
+		return $this->dbBase;
 	}
 	
 	/**
