@@ -24,12 +24,14 @@ class MysqlKsException extends Exception {}
  * @license         Open Source
  * @version         v0.4
  * @since           20.04.2013
- * @last-modified   6.11.2013
+ * @last-modified   21.11.2013
  *
  * @TODO Operacje na kilku tabelach, ewentualnie przepisanie na PDO.
  */
 class MysqlKs {
-	// Parametry połączenia z bazą danych
+	// Parametry połączenia z bazą danych.
+	// Można je wpisać tutaj albo podać przy tworzeniu egzemplarza klasy
+	// @see getInstance()
 	private $dbHost = '';
 	private $dbBase = '';
 	private $dbLogin = '';
@@ -45,6 +47,8 @@ class MysqlKs {
 	
 	// Komunikaty
 	private $komunikatBladPolaczenia = "Połączenie z bazą danych nieudane.";
+	private $komunikatNiepodanoDanychPolaczenia = "Nie podano danych do połączenia.";
+	private $komunikatNiekompletneDanePolaczenia = "Nie podano wszystkich parametrów połączenia.";
 	private $komunikatZleId = "Niepoprawny identyfikowator";
 	private $komunikatNieMaCursora = "Niepoprawne wywołanie metody next(), powinno być
 			poprzedzone wywołaniem metody selectCursor(), selectCursorUser() lub next().";
@@ -52,11 +56,15 @@ class MysqlKs {
 	// %errno% - numer błedu zapytania
 	private $komunikatZleZapytanie = "Błąd w zapytaniu: %error%";
 	
-	// Stałe klasowe
+	// Tryby debugowania
+	// @see setDebugMode
 	const NONE = 0;
 	const ECHO_MODE = 1;
 	const EXCEPTION_MODE = 2;
+	const AUTO_MODE = 3;
 	
+	// Typy wartości zwracanych przez polecenia SELECT
+	// @see setFetchType
 	const FETCH_ASSOC = 0;
 	const FETCH_OBJECT = 1;
 	
@@ -71,7 +79,26 @@ class MysqlKs {
 	/**
 	 * Ustanaowienie połączenia z bazą i ustawienie kodowania.
 	 */
-	private function __construct() {
+	private function __construct($dbHost = null, $dbLogin = null, $dbPassword = null, $dbBase = null) {
+		// Czy podano parametry połączenia
+		if ($dbHost != null) {
+			// Sprawdzamy czy podano wszystkie dane do połączenia
+			if ($dbLogin == null || $dbPassword === null || $dbBase == null) {
+				showError($this->komunikatNiekompletneDanePolaczenia);
+				return;
+			// Podano wszystkie dane do połączenia
+			} else {
+				// Zapisujemy dane do połączenia w zmiennych klasy, aby przy kolejnym
+				// połączeniu przy braku podania danych do połączenia 
+				// móc skorzystać z poprzednich
+				$this->dbHost = $dbHost;
+				$this->dbLogin = $dbLogin;
+				$this->dbPassword = $dbPassword;
+				$this->dbBase = $dbBase;
+			}
+		}
+		
+		
 		// Utworzenie nowego połączenia
 		@$this->db = new mysqli($this->dbHost, $this->dbLogin, $this->dbPassword, $this->dbBase);
 		
@@ -83,18 +110,106 @@ class MysqlKs {
 		
 		// Ustawienie kodowania
 		$this->setCharset($this->dbKodowanie);
+		
+		// Ustawienie trybu debugowania
+		$this->setDebugMode();
 	}
 	
 	/**
 	 * Klasa to klasyczny przykład sigletona. Poniższa metoda służy do utworzenia obiektu.
-	 * @example
-	 * $db = MysqlKs::getInstance();
+	 * Można przekazać do metody parametry połączenia. Można to zrobić jednorazowo.
+	 * Jeżeli nie podamy parametrów połączenia to korzystamy z parametrów podanych na 
+	 * sztywno w klasie albo z poprzednich parametrów połączenia.
+	 * 
+	 * @exmaple $db = MysqlKs::getInstance('localhost', 'root', 'pass123', 'jakas_baza');
+	 * @example $db = MysqlKs::getInstance();
 	 */
-	public static function getInstance() {
-		if (is_null(self::$instance)) {
+	public static function getInstance($dbHost = null, $dbLogin = null, $dbPassword = null, $dbBase = null) {
+		// Czy podano parametry połączenia
+		if ($dbHost != null) {	
+				self::$instance = new MysqlKs($dbHost, $dbLogin, $dbPassword, $dbBase);			
+		} elseif (is_null(self::$instance)) {
+			// Jeżeli nie ma jakiejś danej do połączenia
+			if (!$this->dbBase || !$this->dbLogin || $this->dbPassword === null || !$this->dbBase) {
+				showError($this->komunikatNiekompletneDanePolaczenia);
+				return;
+			}
+			
 			self::$instance = new MysqlKs();
 		}
 		return self::$instance;
+	}
+	
+	/**
+	 * Ustaw host bazy danych.
+	 * @see getInstance()
+	 * @see getDbHost()
+	 */
+	public function setDbHost($dbHost) {
+		$this->dbHost = $dbHost;
+	}
+
+	/**
+	 * Ustaw login bazy danych.
+	 * @see getInstance()
+	 * @see getDbLogin()
+	 */
+	public function setDbLogin($dbLogin) {
+		$this->dbLogin = $dbLogin;
+	}
+
+	/**
+	 * Ustaw hasło bazy danych.
+	 * @see getInstance()
+	 * @see getDbPassword()
+	 */
+	public function setDbPassword($dbPassword) {
+		$this->dbPassword = $dbPassword;
+	}
+
+	/**
+	 * Ustaw baze danych.
+	 * @see getInstance()
+	 * @see getDbBase()
+	 */
+	public function setDbBase($dbBase) {
+		$this->dbBase = $dbBase;
+	}
+	
+	/**
+	 * Pobierz host bazy danych.
+	 * @see getInstance()
+	 * @see setDbHost()
+	 */
+	public function getDbHost() {
+		return $this->dbHost;
+	}
+	
+	/**
+	 * Pobierz login bazy danych.
+	 * @see getInstance()
+	 * @see setDbLogin()
+	 */
+	public function getDbLogin() {
+		return $this->dbLogin;
+	}
+
+	/**
+	 * Pobierz hasło bazy danych.
+	 * @see getInstance()
+	 * @see setDbPassword()
+	 */
+	public function getDbPassword() {
+		return $this->dbPassword;
+	}
+
+	/**
+	 * Pobierz baze danych.
+	 * @see getInstance()
+	 * @see setDbBase()
+	 */
+	public function getDbBase() {
+		return $this->dbBase;
 	}
 	
 	/**
@@ -121,7 +236,7 @@ class MysqlKs {
 
 	/**
 	 * Ustawia kodowanie znaków
-	 * @example $db->setCharset('utf-8');
+	 * @example $db->setCharset('utf8');
 	 */
 	public function setCharset($names) {
 		$this->db->set_charset($names);
@@ -145,6 +260,35 @@ class MysqlKs {
 	public function getFetchType() {
 		return $this->fetchType;
 	}
+	
+	/**
+	 * Ustaw tryb debugowania
+	 * Dostępne 4 tryby: NONE - brak, ECHO_MODE - debugowanie przez instrukcje echo,
+	 * EXCEPTION_MODE - wyrzucanie wyjątków typu MysqlKsException, 
+	 * AUTO_MODE - tryb ECHO_MODE na localhost i tryb NONE na serwerze produkcyjnym (tryb domyślny)
+	 * @param $type - tryb debugowania
+	 * @example setDebugMode(MysklKs::EXCEPTION_MODE)
+	 */
+	public function setDebugMode($type = self::AUTO_MODE) {
+		if ($type == self::AUTO_MODE) {
+			if (($_SERVER["HTTP_HOST"] == "localhost")) {
+				$this->debugMode = self::ECHO_MODE;
+			} else {
+				$this->debugMode = self::NONE;
+			}
+			return;
+		}
+		$this->debugMode = $type;
+	}
+	
+	/**
+	 * Pobierz tryb debugowania
+	 * @see setDebugMode
+	 */
+	public function getDebugMode() {
+		return $this->debugMode;
+	}
+	
 	
 	
 	/**
@@ -189,7 +333,7 @@ class MysqlKs {
 	public function escape($str) {
 		if (is_null($str)) return $str;
 		if ($this->isExpr($str)) {
-			$str["value"] = $this->db->real_escape_string($str["value"]);
+			//$str["value"] = $this->db->real_escape_string($str["value"]);
 			return $str;
 		}
 		return $this->db->real_escape_string($str);
@@ -330,8 +474,10 @@ class MysqlKs {
 	 */
 	public function select($tabela, $wartosci = "*", $dodatki = "") {
 		
-		$zapytanie = getSelectQuery($tabela, $wartosci, $dodatki);
-		return $this->selectUser($zapytanie);	
+		$zapytanie = $this->getSelectQuery($tabela, $wartosci, $dodatki);
+		$wynik = $this->selectUser($zapytanie);	
+	
+		return $wynik;
 	}
 	
 	/**
@@ -453,7 +599,7 @@ class MysqlKs {
 	 *)
 	 */
 	public function selectFull($tabela, $wartosci = "*", $dodatki = "") {
-		$zapytanie = getSelectQuery($tabela, $wartosci, $dodatki);
+		$zapytanie = $this->getSelectQuery($tabela, $wartosci, $dodatki);
 		return $this->selectFullUser($zapytanie);
 	}
 	
@@ -464,7 +610,7 @@ class MysqlKs {
 		$zapytanie = "SELECT ";
 	
 		if (!is_array($wartosci)) $wartosci = array($wartosci);
-		//$wartosci = array_map(array($this, 'escape'), $wartosci);
+		$wartosci = array_map(array($this, 'escape'), $wartosci);
 		
 		for ($i = 0; $i < count($wartosci); $i++) {
 			if ($this->isExpr($wartosci[$i])) 
@@ -535,7 +681,7 @@ class MysqlKs {
 	 */
 	public function selectCursos($tabela, $wartosci = "*", $dodatki = "") {
 		
-		$zapytanie = getSelectQuery($tabela, $wartosci, $dodatki);
+		$zapytanie = $this->getSelectQuery($tabela, $wartosci, $dodatki);
 		return $this->selectCursorUser($zapytanie);	
 	}
 	
